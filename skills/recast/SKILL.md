@@ -70,8 +70,10 @@ Seven steps. Steps 1 to 5 happen against the old repo; steps 6 and 7 build the n
     - where the specs have drifted
     - dead code, duplication and inconsistent patterns
     - scar-tissue candidates: fix commits, special cases, retries, odd error handling, "workaround" or "hack" comments
+
+    End the report by asking the user what they already want changed, added or dropped. Wait for the answer before step 2: it decides which behaviour is captured and what the specs describe.
 2. **Capture behaviour.** For the parts being kept only, write behaviour tests or golden examples against the old app. These become the parity check.
-3. **Draft area specs.** One file per area, describing current behaviour. With no existing specs, derive them from the code and the running app. Code shows what the app does, not what the user meant, so every derived requirement is a question for the user until confirmed. Drift, oddities and scar-tissue candidates go into `open-questions.md` as questions, not silent fixes.
+3. **Draft area specs.** One file per area, describing current behaviour with the changes from step 1 applied. With no existing specs, derive them from the code and the running app. Code shows what the app does, not what the user meant, so every derived requirement is a question for the user until confirmed. Drift, oddities and scar-tissue candidates go into `open-questions.md` as questions, not silent fixes.
 4. **Negotiation rounds.** Propose simplifications, merges, deletions and improvements. Architectural changes are welcome when they serve the goal of simplifying. The user states the changes they want. Each item ends one of three ways:
     - keep: it goes into the area spec
     - change: the area spec is updated
