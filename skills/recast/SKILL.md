@@ -28,6 +28,7 @@ Goals:
 - **Specs describe the current state only.** No history, no "previously", no changelog.
 - **Removals vanish.** A cut item lives only in `open-questions.md` while it is being negotiated, then it is deleted. The old repo is the archive.
 - **Two-way.** You propose opportunities, the user states changes, and rounds continue until settled.
+- **Talk above the code.** The user will not know the internals of a vibe-coded app. Pitch findings, questions and proposals at a level a technical person can follow without reading the code: what a part does, how the parts fit together, and what would change. No function names, file paths or line-level detail.
 - **Code stays clean.** No spec references in code comments. The link between spec and code lives in commit messages.
 - **Fresh repo.** The old app stays available as the reference while the new one is built.
 - **Simple.** Area specs, a constraints section in each, IDs in commits, and a temporary open-questions file. Nothing else.
@@ -71,7 +72,7 @@ Seven steps. Steps 1 to 5 happen against the old repo; steps 6 and 7 build the n
     - scar-tissue candidates: fix commits, special cases, retries, odd error handling, "workaround" or "hack" comments
 2. **Capture behaviour.** For the parts being kept only, write behaviour tests or golden examples against the old app. These become the parity check.
 3. **Draft area specs.** One file per area, describing current behaviour. With no existing specs, derive them from the code and the running app. Code shows what the app does, not what the user meant, so every derived requirement is a question for the user until confirmed. Drift, oddities and scar-tissue candidates go into `open-questions.md` as questions, not silent fixes.
-4. **Negotiation rounds.** Propose simplifications, merges, deletions and improvements. The user states the changes they want. Each item ends one of three ways:
+4. **Negotiation rounds.** Propose simplifications, merges, deletions and improvements. Architectural changes are welcome when they serve the goal of simplifying. The user states the changes they want. Each item ends one of three ways:
     - keep: it goes into the area spec
     - change: the area spec is updated
     - drop: it is deleted everywhere, with no record left
