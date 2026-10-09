@@ -13,7 +13,7 @@ Skills for Claude Code, packaged as a plugin marketplace.
 
 | Skill | What it does |
 | --- | --- |
-| [recast](skills/recast/SKILL.md) | Rebuild a vibe-coded app in a fresh repo from consolidated, improved area specs |
+| [recast](skills/recast/SKILL.md) | Rebuild a vibe-coded app in a fresh repo from consolidated, improved area specs, with a layered review page for open questions |
 
 ## Adding a skill
 
