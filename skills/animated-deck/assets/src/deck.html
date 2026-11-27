@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Deck</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Inter: SIL Open Font License 1.1, subset to Latin. -->
+<style>
+@font-face {
+  font-family: "Deck Inter";
+  src: url(data:font/woff2;base64,%%FONT%%) format("woff2");
+  font-weight: 100 900;
+  font-display: block;
+}
+:root {
+  --bg: #F6F5F1;
+  --ink: #1D2331;
+  --ink-2: #5A6272;
+  --accent: #4C56D8;
+}
+html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+body { font-family: "Deck Inter", "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif; cursor: default; }
+#stage { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+#stage text { font-family: "Deck Inter", "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif; }
+#notes {
+  position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 140%);
+  width: min(1100px, 86vw); max-height: 42vh; overflow: auto; box-sizing: border-box;
+  padding: 22px 28px; border-radius: 16px; background: rgba(255,255,255,.97);
+  box-shadow: 0 18px 50px rgba(20,28,60,.18), 0 2px 6px rgba(20,28,60,.08);
+  color: var(--ink); font-size: 20px; line-height: 1.55; transition: transform .35s cubic-bezier(.2,.8,.2,1);
+}
+#notes.open { transform: translate(-50%, 0); }
+#notes .meta { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); margin-bottom: 8px; }
+#notes p { margin: 0 0 .8em; }
+#notes p:last-child { margin-bottom: 0; }
+#notes ul { margin: 0; padding-left: 1.2em; }
+#notes li { margin: 0 0 .45em; }
+#notes li:last-child { margin-bottom: 0; }
+#notes .head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+#notes .pop { font: inherit; font-size: 13px; color: var(--accent); background: none; border: 0; padding: 0; cursor: pointer; }
+#notes .pop:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<svg id="stage" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <circle cx="18" cy="18" r="1.3" fill="#DEDBD3"/>
+    </pattern>
+    <radialGradient id="glow" cx="50%" cy="46%" r="62%">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity=".95"/>
+      <stop offset=".55" stop-color="#FFFFFF" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- <symbol id="logo-NAME" viewBox="VIEWBOX">SVG</symbol>  one per icons/NAME.svg; build.py fills %-delimited VB_NAME and SVG_NAME placeholders. Use via el("use", { href: "#logo-NAME" }). -->
+  </defs>
+  <rect width="1920" height="1080" fill="#F6F5F1"/>
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+  <rect width="1920" height="1080" fill="url(#glow)"/>
+  <g id="world"></g>
+  <g id="hud"></g>
+</svg>
+<div id="notes"><div class="head"><div class="meta"></div><button class="pop">Open in new window</button></div><div class="body"></div></div>
+
+<script>
+"use strict";
+
+/* ---------- Shared style: later slides reuse these so the drawing stays consistent. ---------- */
+const STYLE = {
+  ink: "#1D2331", ink2: "#5A6272", muted: "#A3ABB9", hair: "#E2E4E9",
+  accent: "#4C56D8", accentSoft: "#DADDFB", paper: "#FFFFFF",
+  icon: { stroke: 3, radius: 8 },          // line icons: 3px round strokes, 8px corner radius at 48px size
+  card: { radius: 24, border: "#E3E5EA" },
+};
+
+/* ---------- Timing helpers ---------- */
+const Ease = {
+  linear: t => t,
+  inOut: t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2,
+  inOutQuint: t => t < .5 ? 16 * t ** 5 : 1 - Math.pow(-2 * t + 2, 5) / 2,
+  out: t => 1 - Math.pow(1 - t, 3),
+  outQuint: t => 1 - Math.pow(1 - t, 5),
+  in: t => t * t * t,
+  outBack: t => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); },
+};
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, p) => a + (b - a) * p;
+const seg = (t, start, dur, ease = Ease.inOut) => ease(clamp((t - start) / dur));
+const mixHex = (a, b, p) => {
+  const pa = [1, 3, 5].map(i => parseInt(a.slice(i, i + 2), 16));
+  const pb = [1, 3, 5].map(i => parseInt(b.slice(i, i + 2), 16));
+  return "rgb(" + pa.map((v, i) => Math.round(lerp(v, pb[i], p))).join(",") + ")";
+};
+function rng(seed) { return () => (seed = (seed * 16807) % 2147483647, (seed - 1) / 2147483646); }
+
+/* ---------- SVG helpers ---------- */
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs = {}, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) n.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(n);
+  return n;
+}
+const set = (n, attrs) => { for (const k in attrs) n.setAttribute(k, attrs[k]); };
+const cubicD = (p) => `M${p[0][0].toFixed(2)},${p[0][1].toFixed(2)} C${p[1][0].toFixed(2)},${p[1][1].toFixed(2)} ${p[2][0].toFixed(2)},${p[2][1].toFixed(2)} ${p[3][0].toFixed(2)},${p[3][1].toFixed(2)}`;
+
+/* ---------- Engine ---------- */
+const world = document.getElementById("world");
+const hud = document.getElementById("hud");
+const notesEl = document.getElementById("notes");
+const slides = [];
+
+function defineSlide(spec) { slides.push(spec); }
+// Built after fonts load, so text metrics come from the embedded face.
+function buildSlides() {
+  for (const spec of slides) {
+    spec.world = el("g", { style: "display:none" }, world);
+    spec.hud = el("g", { style: "display:none" }, hud);
+    spec.build(spec);
+  }
+}
+function setCamera(spec, cam, k = 1, off = [0, 0]) {
+  const { cx = 960, cy = 540, s = 1 } = cam || {};
+  spec.world.setAttribute("transform", `translate(${(960 + off[0]).toFixed(2)} ${(540 + off[1]).toFixed(2)}) scale(${(s * k).toFixed(5)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`);
+}
+const PUSH = .75;
+const ZOOM = 1.1;
+
+const state = { index: 0, start: 0, frozen: null };
+function show(index, at = 0) {
+  state.index = clamp(index, 0, slides.length - 1);
+  state.reverse = at > 0;
+  slides.forEach((s, i) => {
+    const v = i === state.index ? "" : "none";
+    s.world.style.display = v; s.hud.style.display = v;
+    s.world.removeAttribute("opacity"); s.hud.removeAttribute("opacity");
+  });
+  state.start = performance.now() - at * 1000;
+  state.drawn = null;
+  renderNotes();
+  const url = new URL(location.href);
+  url.searchParams.set("slide", state.index + 1);
+  url.searchParams.delete("t");
+  history.replaceState(null, "", url);
+}
+function current() { return slides[state.index]; }
+function elapsed() { return state.frozen ?? (performance.now() - state.start) / 1000; }
+function frame() {
+  const s = current();
+  // `lead` is time before the slide's own timeline, for the previous slide to point at what comes next.
+  const L = s.lead || 0, t = Math.min(elapsed(), s.duration + L), ts = Math.max(0, t - L);
+  // A slide at rest is not drawn again: each redraw repaints every blurred shadow.
+  const key = state.index + ":" + t;
+  if (key === state.drawn) { requestAnimationFrame(frame); return; }
+  state.drawn = key;
+  const P = slides[state.index - 1];
+  // `zoomIn` dives into a point of the previous slide (`zoomFrom`); `zoomOut` pulls back from it.
+  const zin = s.enter === "zoomIn", zout = s.enter === "zoomOut";
+  const Z = s.zoomTime || ZOOM, z = Ease.inOut(clamp(ts / Z));
+  // A zoomIn slide is centred on the screen point of `zoomFrom` as the previous slide dives into it.
+  let off = [0, 0];
+  if (P && zin && z < 1 && !state.reverse) {
+    const pc = P.render(P.duration), f = s.zoomFrom || { x: pc.cx, y: pc.cy }, S = pc.s * lerp(1, 3.3, z);
+    off = [(1 - z) * (f.x - pc.cx) * S, (1 - z) * (f.y - pc.cy) * S];
+  }
+  setCamera(s, s.render(ts), zin ? lerp(.3, 1, z) : zout ? lerp(2.4, 1, z) : 1, off);
+  if (zin || zout) s.world.setAttribute("opacity", clamp((ts / Z - .25) / .5).toFixed(3));
+  if (P && (zin || zout)) {
+    const vis = t < L + Z && !state.reverse;
+    P.world.style.display = P.hud.style.display = vis ? "" : "none";
+    if (vis) {
+      const pc = P.render(P.duration), f = s.zoomFrom || { x: pc.cx, y: pc.cy };
+      setCamera(P, zin ? { cx: lerp(pc.cx, f.x, z), cy: lerp(pc.cy, f.y, z), s: pc.s } : pc, zin ? lerp(1, 3.3, z) : lerp(1, .42, z));
+      // The title stays still while the world zooms, so it clears first.
+      P.world.setAttribute("opacity", (1 - clamp((ts / Z - .15) / .5)).toFixed(3));
+      P.hud.setAttribute("opacity", (1 - clamp(L ? t / L : t / Z / .3)).toFixed(3));
+      if (P.leave) P.leave(clamp(t / (L || 1)));
+    }
+  }
+  // Slides marked `enter: "push"` open by pushing the camera through the previous slide's final state.
+  if (P && s.enter === "push") {
+    const out = clamp(t / PUSH);
+    const vis = out < 1 && !state.reverse;
+    P.world.style.display = P.hud.style.display = vis ? "" : "none";
+    if (vis) {
+      setCamera(P, P.render(P.duration), 1 + .14 * Ease.in(out));
+      const o = (1 - Ease.out(out)).toFixed(3);
+      P.world.setAttribute("opacity", o); P.hud.setAttribute("opacity", o);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+function next() {
+  state.frozen = null;
+  if (state.index < slides.length - 1) show(state.index + 1, 0);
+  else show(state.index, current().duration + (current().lead || 0));
+}
+function prev() {
+  state.frozen = null;
+  if (state.index > 0) show(state.index - 1, slides[state.index - 1].duration + (slides[state.index - 1].lead || 0));
+  else show(0, 0);
+}
+let notesWin = null;
+function renderNotes() {
+  const s = current();
+  const meta = `Slide ${state.index + 1} of ${slides.length} · ${s.title}`;
+  const body = s.notes && s.notes.length ? "<ul>" + s.notes.map(p => `<li>${p}</li>`).join("") + "</ul>" : "<p>No notes.</p>";
+  notesEl.querySelector(".meta").textContent = meta;
+  notesEl.querySelector(".body").innerHTML = body;
+  if (notesWin && !notesWin.closed) {
+    notesWin.document.querySelector(".meta").textContent = meta;
+    notesWin.document.querySelector(".body").innerHTML = body;
+  }
+}
+// The window is written from here rather than loaded from a URL, so it works from file:// and the deck drives it directly.
+function openNotesWindow() {
+  const w = open("", "deck-notes", "popup,width=900,height=640");
+  if (!w) return;
+  const face = [...document.styleSheets[0].cssRules].find(r => r instanceof CSSFontFaceRule);
+  w.document.open();
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Speaker notes</title><style>
+${face ? face.cssText : ""}
+body { margin: 0; padding: 36px 44px; background: #F6F5F1; color: #1D2331; font-family: "Deck Inter", "Inter", "Segoe UI", "Helvetica Neue", Arial, sans-serif; font-size: 26px; line-height: 1.55; }
+.meta { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: #5A6272; margin-bottom: 14px; }
+p { margin: 0; } ul { margin: 0; padding-left: 1.2em; } li { margin: 0 0 .6em; }
+</style></head><body><div class="meta"></div><div class="body"></div></body></html>`);
+  w.document.close();
+  w.addEventListener("keydown", onKey);
+  notesWin = w;
+  notesEl.classList.remove("open");
+  renderNotes();
+  w.focus();
+}
+addEventListener("pagehide", () => { if (notesWin && !notesWin.closed) notesWin.close(); });
+notesEl.querySelector(".pop").addEventListener("click", openNotesWindow);
+function onKey(e) {
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (["ArrowRight", "PageDown", " ", "Enter"].includes(e.key)) { e.preventDefault(); next(); }
+  else if (["ArrowLeft", "PageUp", "Backspace"].includes(e.key)) { e.preventDefault(); prev(); }
+  else if (e.key === "n" || e.key === "N") notesEl.classList.toggle("open");
+  else if (e.key === "Home") { state.frozen = null; show(0, 0); }
+}
+addEventListener("keydown", onKey);
+addEventListener("click", e => { if (!notesEl.contains(e.target)) next(); });
+
+
+/* ---------- Shared helpers ---------- */
+const WORD = { size: 230, weight: 620, tracking: -6, baseline: 622 };
+
+function layoutLetters(word, cx = 960, pad = 30) {
+  const probe = el("text", { x: 0, y: 0, "font-size": WORD.size, "font-weight": WORD.weight, "letter-spacing": WORD.tracking }, world);
+  probe.textContent = word;
+  const exts = [...word].map((ch, i) => ({ ch, ext: probe.getExtentOfChar(i) }));
+  const total = probe.getComputedTextLength() - WORD.tracking;
+  probe.remove();
+  const ox = cx - total / 2;
+  const top = WORD.baseline - WORD.size * .9, bottom = WORD.baseline + WORD.size * .17;
+  const letters = exts.map(({ ch, ext }) => {
+    const x = ox + ext.x, w = ext.width + WORD.tracking;
+    return { ch, x, cx: x + w / 2, w };
+  });
+  // Tiles sit apart with room around each letter; the letters close up to their kerned places once the tiles fade.
+  const gap = 24;
+  // A space gets no tile, only a little extra room.
+  letters.forEach(l => { l.space = !l.ch.trim(); l.tw = l.space ? 16 : Math.max(l.w + pad * 2, 96); });
+  const row = letters.reduce((a, l) => a + l.tw, 0) + gap * (letters.length - 1);
+  let x = cx - row / 2;
+  letters.forEach(l => { l.tcx = x + l.tw / 2; l.cy = (top + bottom) / 2; l.th = bottom - top; x += l.tw + gap; });
+  return letters;
+}
+
+/* The shadow of a word, blurred once into a bitmap; the camera only scales it. */
+function buildWordShadow(parent, letters, blur = 14, dy = 18) {
+  const k = 2, m = 3 * blur;
+  const x0 = Math.min(...letters.map(l => l.x)) - m, x1 = Math.max(...letters.map(l => l.x + l.w)) + m + 40;
+  const y0 = WORD.baseline - WORD.size - m, y1 = WORD.baseline + WORD.size * .3 + dy + m;
+  const c = document.createElement("canvas");
+  c.width = Math.ceil((x1 - x0) * k); c.height = Math.ceil((y1 - y0) * k);
+  const g = c.getContext("2d"), far = 20000;
+  g.font = `${WORD.weight} ${WORD.size * k}px "Deck Inter"`;
+  // The text is drawn off the canvas so that only its shadow lands on it.
+  Object.assign(g, { fillStyle: "#000", shadowColor: "#1B2340", shadowBlur: 2 * blur * k, shadowOffsetX: far, shadowOffsetY: dy * k });
+  for (const l of letters) g.fillText(l.ch, (l.x - x0) * k - far, (WORD.baseline - y0) * k);
+  return el("image", { href: c.toDataURL(), x: x0, y: y0, width: x1 - x0, height: y1 - y0, opacity: 0 }, parent);
+}
+function buildBoxWord(root, word, pad) {
+  const letters = layoutLetters(word, 960, pad).filter(l => !l.space);
+  const n = letters.length, step = Math.min(215, 1500 / (n - 1));
+  const wrap = el("g", {}, root);
+  const gLines = el("g", {}, wrap);
+  const gBoxes = el("g", {}, wrap);
+  const shadow = buildWordShadow(wrap, letters);
+  const gText = el("g", {}, wrap);
+  const items = letters.map((l, i) => {
+    const chart = { x: 960 + (i - (n - 1) / 2) * step, y: 540 + (i % 2 ? 92 : -92) };
+    const boxG = el("g", {}, gBoxes), boxShadow = buildShadow(boxG, SHADOW.node), box = el("rect", { fill: STYLE.paper }, boxG);
+    const g = el("g", {}, gText);
+    const text = el("text", { x: l.x, y: WORD.baseline, "font-size": WORD.size, "font-weight": WORD.weight, fill: STYLE.ink }, g);
+    text.textContent = l.ch;
+    return { ...l, chart, boxG, boxShadow, box, g };
+  });
+  const lines = items.slice(1).map(() => ({
+    path: el("path", { fill: "none", stroke: STYLE.muted, "stroke-width": 2.5, "stroke-linecap": "round", pathLength: 1 }, gLines),
+    head: el("path", { fill: "none", stroke: STYLE.muted, "stroke-width": 2.5, "stroke-linecap": "round", "stroke-linejoin": "round", d: "M-9,-7 L0,0 L-9,7" }, gLines),
+  }));
+  return { wrap, items, lines, shadow };
+}
+
+const CHART_BOX = { w: 132, h: 92, rx: 20 };
+const WELCOME_T = { appear: .35, draw: .95, glide: 2.0, glideDur: 1.15, letter: 3.2, fade: 4.15, close: 4.2 };
+
+/* Box geometry at time t. */
+function boxFrame(it, i, t, T) {
+  const g = seg(t, T.glide + i * .045, T.glideDur, Ease.inOutQuint);
+  return {
+    g,
+    x: lerp(it.chart.x, it.tcx, g), y: lerp(it.chart.y, it.cy, g),
+    w: lerp(CHART_BOX.w, it.tw, g), h: lerp(CHART_BOX.h, it.th, g), rx: lerp(CHART_BOX.rx, 28, g),
+  };
+}
+/* Places a letter: `spread` 1 centres it in its tile, 0 puts it in its kerned place in the word. */
+function placeLetter(it, spread, lit, dy = 0) {
+  const dx = (it.tcx - it.cx) * spread;
+  const ls = lerp(.86, 1, Ease.outBack(lit));
+  set(it.g, { opacity: lit.toFixed(3), transform: `translate(${(it.cx + dx).toFixed(2)} ${(it.cy + lerp(14, 0, lit) + dy).toFixed(2)}) scale(${ls.toFixed(4)}) translate(${(-it.cx).toFixed(2)} ${(-it.cy).toFixed(2)})` });
+}
+
+function renderBoxWord(W, t, T) {
+  const close = seg(t, T.close, 1.0, Ease.inOutQuint);
+  const frames = W.items.map((it, i) => {
+    const f = boxFrame(it, i, t, T);
+    const appear = seg(t, T.appear + i * .08, .6, Ease.outBack);
+    const fade = seg(t, T.letter + i * .07, .35, Ease.in);
+    const lit = seg(t, T.letter + i * .07 + .28, .6, Ease.out);
+    const sc = (.7 + .3 * appear) * lerp(1, .2, fade);
+    set(it.boxG, {
+      transform: `translate(${lerp(f.x, it.cx, close).toFixed(2)} ${f.y.toFixed(2)}) scale(${sc.toFixed(4)})`,
+      opacity: (clamp(appear * 1.6) * (1 - fade)).toFixed(3),
+    });
+    setShadow(it.boxShadow, -f.w / 2, -f.h / 2, f.w, f.h, f.rx);
+    set(it.box, {
+      x: -f.w / 2, y: -f.h / 2, width: f.w, height: f.h, rx: f.rx,
+      stroke: mixHex("#9AA2B1", STYLE.accent, lit * (1 - fade)), "stroke-width": 2.5,
+    });
+    placeLetter(it, 1 - close, lit);
+    return f;
+  });
+  W.lines.forEach((L, i) => {
+    const A = frames[i], B = frames[i + 1];
+    const a = [A.x + A.w / 2, A.y], b = [B.x - B.w / 2 - 4, B.y];
+    const k = Math.max(20, (b[0] - a[0]) * .55);
+    const draw = seg(t, T.draw + i * .1, .45, Ease.inOut);
+    const fade = clamp(1 - Math.max(A.g, B.g) / .5);
+    set(L.path, { d: cubicD([a, [a[0] + k, a[1]], [b[0] - k, b[1]], b]), "stroke-dasharray": "1 1", "stroke-dashoffset": (1 - draw).toFixed(4), opacity: draw > 0 ? fade.toFixed(3) : 0 });
+    set(L.head, { transform: `translate(${b[0].toFixed(2)} ${b[1].toFixed(2)})`, opacity: (clamp((draw - .8) / .2) * fade).toFixed(3) });
+  });
+  set(W.shadow, { opacity: (.10 * seg(t, T.close + .4, 1, Ease.out)).toFixed(3) });
+}
+/* Titles live in the HUD so camera moves never disturb them. */
+function buildTitle(s, text) {
+  const id = "titleClip" + slides.indexOf(s);
+  s.rule = el("rect", { x: 140, y: 112, height: 6, rx: 3, fill: STYLE.accent }, s.hud);
+  const clip = el("clipPath", { id }, s.hud);
+  el("rect", { x: 120, y: 128, width: 1700, height: 90 }, clip);
+  const tg = el("g", { "clip-path": `url(#${id})` }, s.hud);
+  s.titleText = el("text", { x: 140, y: 196, "font-size": 62, "font-weight": 700, fill: STYLE.ink, "letter-spacing": "-1.2" }, tg);
+  s.titleText.textContent = text;
+  if (s.section) {
+    s.sectionText = el("text", { x: 224, y: 122, "font-size": 19, "font-weight": 700, fill: STYLE.muted, "letter-spacing": "2.6" }, s.hud);
+    s.sectionText.textContent = s.section.toUpperCase();
+  }
+}
+/* Accent rule extends, then the text rises through its mask. */
+function renderTitle(s, t, at) {
+  set(s.rule, { width: (64 * seg(t, at, .6, Ease.out)).toFixed(2) });
+  const tp = seg(t, at + .15, .85, Ease.outQuint);
+  set(s.titleText, { transform: `translate(0 ${lerp(80, 0, tp).toFixed(2)})`, opacity: clamp(tp * 1.5).toFixed(3) });
+  if (s.sectionText) rise(s.sectionText, seg(t, at + .3, .6, Ease.out), 0, lerp(-12, 0, seg(t, at + .3, .6, Ease.out)));
+}
+/* Soft shadows as stacked faint rounded rects, each set [blur, drop, opacity, layers].
+   A blur filter is repainted on every camera move, which stutters on large screens. */
+const SHADOW = { card: [[18, 16, .09, 8], [2.5, 2, .07, 3]], node: [[5, 5, .07, 4]] };
+function buildShadow(parent, spec = SHADOW.card, color = "#1B2340") {
+  const g = el("g", { fill: color }, parent);
+  g.layers = spec.flatMap(([b, dy, a, n]) => Array.from({ length: n }, (_, i) => ({ r: el("rect", { "fill-opacity": (a / n).toFixed(4) }, g), d: b * 1.6 * (2 * (i + .5) / n - 1), dy })));
+  return g;
+}
+function setShadow(g, x, y, w, h, rx) {
+  for (const { r, d, dy } of g.layers) set(r, { x: x - d, y: y - d + dy, width: Math.max(0, w + 2 * d), height: Math.max(0, h + 2 * d), rx: Math.max(0, rx + d) });
+}
+function buildCard(parent, w, h) {
+  const g = el("g", {}, parent);
+  setShadow(buildShadow(g), -w / 2, -h / 2, w, h, STYLE.card.radius);
+  const inner = el("g", {}, g);
+  el("rect", { x: -w / 2, y: -h / 2, width: w, height: h, rx: STYLE.card.radius, fill: STYLE.paper, stroke: STYLE.card.border, "stroke-width": 1.5 }, inner);
+  return { g, inner };
+}
+
+/* Line icons on a 48 grid; each path draws in with pathLength 1. */
+const ICONS = {
+  lock: ["M11,22 H37 a3,3 0 0 1 3,3 V39 a4,4 0 0 1 -4,4 H12 a4,4 0 0 1 -4,-4 V25 a3,3 0 0 1 3,-3 Z", "M15,22 V15 a9,9 0 0 1 18,0 V22", "M24,30 V35"],
+  doc: ["M12,5 H29 L37,13 V43 H12 Z", "M29,5 V13 H37", "M18,22 H31", "M18,28 H31", "M18,34 H26"],
+  repeat: ["M37,17 A15,15 0 0 0 10,20", "M37,8 V17 H28", "M11,31 A15,15 0 0 0 38,28", "M11,40 V31 H20"],
+  code: ["M17,15 L8,24 L17,33", "M31,15 L40,24 L31,33", "M27,11 L21,37"],
+  machine: ["M5,17 H17 V31 H5 Z", "M31,17 H43 V31 H31 Z", "M17,24 H31"],
+  tick: ["M11,25 L20,34 L37,15"],
+  cross: ["M14,14 L34,34", "M34,14 L14,34"],
+  globe: ["M24,6 A18,18 0 1 1 23.99,6", "M6,24 H42", "M24,6 C15,14 15,34 24,42", "M24,6 C33,14 33,34 24,42"],
+  search: ["M21,8 A13,13 0 1 1 20.99,8", "M30.5,30.5 L41,41"],
+  clock: ["M24,6 A18,18 0 1 1 23.99,6", "M24,14 V24 L31,29"],
+  laptop: ["M11,11 H37 a2,2 0 0 1 2,2 V32 H9 V13 a2,2 0 0 1 2,-2 Z", "M4,37 H44"],
+  server: ["M9,8 H39 a2,2 0 0 1 2,2 V19 H7 V10 a2,2 0 0 1 2,-2 Z", "M7,27 H41 V38 a2,2 0 0 1 -2,2 H9 a2,2 0 0 1 -2,-2 Z", "M13,14 H17", "M13,34 H17"],
+  chip: ["M15,13 H33 a2,2 0 0 1 2,2 V33 a2,2 0 0 1 -2,2 H15 a2,2 0 0 1 -2,-2 V15 a2,2 0 0 1 2,-2 Z", "M20,7 V13", "M28,7 V13", "M20,35 V41", "M28,35 V41", "M7,20 H13", "M7,28 H13", "M35,20 H41", "M35,28 H41"],
+  folder: ["M6,14 a3,3 0 0 1 3,-3 H19 L23,15 H39 a3,3 0 0 1 3,3 V37 a3,3 0 0 1 -3,3 H9 a3,3 0 0 1 -3,-3 Z", "M6,21 H42"],
+  terminal: ["M9,9 H39 a3,3 0 0 1 3,3 V36 a3,3 0 0 1 -3,3 H9 a3,3 0 0 1 -3,-3 V12 a3,3 0 0 1 3,-3 Z", "M14,19 L20,24 L14,29", "M23,30 H32"],
+  toolkit: ["M8,16 H40 a3,3 0 0 1 3,3 V38 a3,3 0 0 1 -3,3 H8 a3,3 0 0 1 -3,-3 V19 a3,3 0 0 1 3,-3 Z", "M17,16 V11 a2,2 0 0 1 2,-2 H29 a2,2 0 0 1 2,2 V16", "M5,27 H43", "M24,24 V30"],
+  plus: ["M24,10 V38", "M10,24 H38"],
+  play: ["M16,10 L38,24 L16,38 Z"],
+  arm: ["M8,42 H30", "M19,42 V32", "M19,32 L30,17", "M30,17 L40,24", "M40,24 L41,32"],
+};
+function buildIcon(parent, name, size, color) {
+  const g = el("g", { transform: `scale(${size / 48})` }, parent);
+  return ICONS[name].map(d => el("path", { d, fill: "none", stroke: color, "stroke-width": STYLE.icon.stroke * 48 / size * 1.25, "stroke-linecap": "round", "stroke-linejoin": "round", pathLength: 1 }, g));
+}
+function drawPaths(paths, p) { paths.forEach(n => set(n, { "stroke-dasharray": "1 1", "stroke-dashoffset": (1 - p).toFixed(4) })); }
+/* Fade and rise; `p` 0..1. */
+/* Brand logo from a <symbol id="logo-ID"> filled by build.py from icons/ID.svg. */
+function logo(parent, id, x, y, size, color) {
+  return el("use", { href: `#logo-${id}`, x: x - size / 2, y: y - size / 2, width: size, height: size, fill: color }, parent);
+}
+function rise(n, p, dy = 26, x = 0) { set(n, { opacity: clamp(p * 1.4).toFixed(3), transform: `translate(${x} ${lerp(dy, 0, p).toFixed(2)})` }); }
+function pop(n, x, y, p, from = .82) { set(n, { transform: `translate(${x} ${y}) scale(${lerp(from, 1, p).toFixed(4)})`, opacity: clamp(p * 2).toFixed(3) }); }
+
+// Inline style, because the stage stylesheet sets the font family of every text.
+const MONO_CSS = "font-family: ui-monospace, 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace; white-space: pre";
+
+/* ---------- Slides ---------- */
+/* Each slide: title, duration (s), optional section/enter/lead, notes, build(s) and render(t) returning a camera. Reference the slide itself through `this`, never by index. */
+
+defineSlide({
+  title: "Welcome",
+  duration: 5.8,
+  notes: [],
+  build(s) { s.W = buildBoxWord(s.world, "Welcome"); },
+  render(t) {
+    renderBoxWord(this.W, t, WELCOME_T);
+    const p = seg(t, 0, 5.6, Ease.out);
+    return { cx: 960, cy: lerp(552, 540, p), s: lerp(1.045, 1, p) };
+  },
+});
+
+defineSlide({
+  title: "Cards",
+  section: "Section",
+  duration: 4.2,
+  notes: [
+    "First point.",
+    "Second point.",
+  ],
+  build(s) {
+    buildTitle(s, "Title");
+    const labels = [["Card one", "lock"], ["Card two", "doc"], ["Card three", "repeat"]];
+    s.cards = labels.map(([label, icon], i) => {
+      const wrap = el("g", {}, s.world);
+      const c = buildCard(wrap, 460, 340);
+      set(c.g, { transform: `translate(${400 + i * 560} 590)` });
+      const iconGroup = el("g", { transform: `translate(${400 + i * 560 - 190} 480)` }, wrap);
+      const paths = buildIcon(iconGroup, icon, 72, STYLE.accent);
+      const text = el("text", { x: 400 + i * 560 - 190, y: 640, "font-size": 40, "font-weight": 700, fill: STYLE.ink, "letter-spacing": "-.6" }, wrap);
+      text.textContent = label;
+      return { wrap, paths };
+    });
+  },
+  render(t) {
+    const s = this;
+    renderTitle(s, t, .5);
+    s.cards.forEach((c, i) => {
+      const at = 1.1 + i * .25;
+      rise(c.wrap, seg(t, at, .7, Ease.out));
+      drawPaths(c.paths, seg(t, at + .3, .8, Ease.inOut));
+    });
+    return { cx: 960, cy: 540, s: 1 };
+  },
+});
+
+defineSlide({
+  title: "Code",
+  section: "Section",
+  duration: 3.6,
+  enter: "push",
+  notes: [
+    "Walk through the snippet.",
+  ],
+  build(s) {
+    buildTitle(s, "Title");
+    s.panel = el("g", {}, s.world);
+    const c = buildCard(s.panel, 1100, 420);
+    set(c.g, { transform: "translate(960 620)" });
+    const CODE = ["const greeting = \"hello\";", "function run(name) {", "  return `${greeting}, ${name}`;", "}"];
+    s.lines = CODE.map((str, i) => {
+      const n = el("text", { x: 480, y: 510 + i * 56, style: MONO_CSS, "font-size": 34, "font-weight": 520, fill: STYLE.ink }, s.panel);
+      n.textContent = str;
+      return n;
+    });
+  },
+  render(t) {
+    const s = this;
+    renderTitle(s, t, .9);
+    rise(s.panel, seg(t, 1.2, .7, Ease.out));
+    s.lines.forEach((n, i) => set(n, { opacity: seg(t, 1.5 + i * .25, .5, Ease.out).toFixed(3) }));
+    return { cx: 960, cy: 540, s: 1 };
+  },
+});
+
+defineSlide({
+  title: "Thank you",
+  duration: 3.2,
+  notes: [
+    "Thank you.",
+    "Questions.",
+  ],
+  build(s) {
+    const letters = layoutLetters("Thank you").filter(l => !l.space);
+    s.shadow = buildWordShadow(s.world, letters);
+    const g = el("g", {}, s.world);
+    s.letters = letters.map(l => {
+      const n = el("text", { x: l.x, y: WORD.baseline, "font-size": WORD.size, "font-weight": WORD.weight, fill: STYLE.ink }, g);
+      n.textContent = l.ch;
+      return n;
+    });
+    s.rule = el("rect", { y: WORD.baseline + 70, height: 8, rx: 4, fill: STYLE.accent }, s.world);
+  },
+  render(t) {
+    const s = this;
+    s.letters.forEach((n, i) => {
+      const k = seg(t, .3 + i * .06, .8, Ease.outQuint);
+      set(n, { opacity: clamp(k * 1.6).toFixed(3), transform: `translate(0 ${lerp(70, 0, k).toFixed(2)})` });
+    });
+    const w = 120 * seg(t, 1.1, .7, Ease.out);
+    set(s.rule, { x: 960 - w / 2, width: w });
+    set(s.shadow, { opacity: (.10 * seg(t, 1.2, 1, Ease.out)).toFixed(3) });
+    const p = seg(t, 0, 3.2, Ease.out);
+    return { cx: 960, cy: lerp(552, 540, p), s: lerp(1.04, 1, p) };
+  },
+});
+
+
+/* ---------- Start ---------- */
+document.fonts.ready.then(() => {
+  buildSlides();
+  const q = new URLSearchParams(location.search);
+  const start = clamp((parseInt(q.get("slide"), 10) || 1) - 1, 0, slides.length - 1);
+  show(start, 0);
+  if (q.has("t")) state.frozen = parseFloat(q.get("t"));
+  requestAnimationFrame(frame);
+  if (q.has("notes")) notesEl.classList.add("open");
+  document.body.dataset.ready = "1";
+});
+</script>
+</body>
+</html>
